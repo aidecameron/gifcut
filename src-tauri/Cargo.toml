@@ -1,0 +1,26 @@
+[package]
+name = "gifcut"
+version = "0.12.12"
+description = "A GIF editor built with Tauri"
+authors = ["aidecameron"]
+license = "AGPL-3.0"
+repository = ""
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = [ "dialog-message", "window-set-size", "window-set-focus", "window-create", "dialog-open", "dialog-save", "process-command-api", "shell-sidecar", "fs-remove-dir", "fs-copy-file", "fs-create-dir", "fs-exists", "fs-read-dir", "fs-write-file", "fs-read-file", "path-all", "shell-open"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+gif = "0.12"
+image = "0.24"
+
+[features]
+# this feature is used for production builds or when `devPath` points to the filesystem
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+

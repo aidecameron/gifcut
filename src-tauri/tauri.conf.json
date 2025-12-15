@@ -1,0 +1,88 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist",
+    "withGlobalTauri": false
+  },
+  "package": {
+    "productName": "GifCut",
+    "version": "0.12.12"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "dialog": {
+        "save": true,
+        "open": true,
+        "message": true
+      },
+      "fs": {
+        "all": false,
+        "readFile": true,
+        "writeFile": true,
+        "readDir": true,
+        "createDir": true,
+        "removeDir": true,
+        "copyFile": true,
+        "exists": true,
+        "scope": ["$RESOURCE/**", "$APP/**", "$TEMP/**"]
+      },
+      "path": {
+        "all": true
+      },
+      "window": {
+        "all": false,
+        "create": true,
+        "setFocus": true,
+        "setSize": true
+      },
+      "shell": {
+        "all": false,
+        "open": true,
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "gifsicle",
+            "cmd": "gifsicle",
+            "sidecar": true
+          },
+          {
+            "name": "gifski",
+            "cmd": "gifski",
+            "sidecar": true
+          }
+        ]
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": "all",
+      "identifier": "com.jblogs.gif-editor",
+      "icon": [
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+        "icons/icon.icns",
+        "icons/icon.ico"
+      ],
+      "resources": [],
+      "externalBin": ["../binaries/bin/gifsicle", "../binaries/bin/gifski"]
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "GifCut v0.12.12",
+        "width": 1000,
+        "height": 850,
+        "minWidth": 1000,
+        "minHeight": 830
+      }
+    ]
+  }
+}
