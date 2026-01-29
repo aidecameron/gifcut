@@ -4,10 +4,11 @@
 use std::fs;
 use std::io::Read;
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::path::PathBuf;
 use std::env::temp_dir;
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use image::{DynamicImage, Rgb, RgbImage};
 use gif::{DecodeOptions, Decoder};
@@ -30,6 +31,7 @@ fn run_sidecar_with_logging(command: &str, args: Vec<String>) -> Result<tauri::a
         .map_err(|e| format!("调用 {} 失败: {}", command, e))?;
     
     let stdout = output.stdout.as_str();
+    let stderr = output.stderr.as_str();
     let lines: Vec<&str> = stdout.lines().collect();
     let last_lines = if lines.len() > 5 {
         &lines[lines.len() - 5..]
@@ -41,6 +43,16 @@ fn run_sidecar_with_logging(command: &str, args: Vec<String>) -> Result<tauri::a
         println!("[TEMP_DEBUG] [CMD RESULT] Last 5 lines:\n{}", last_lines.join("\n"));
     } else {
         println!("[TEMP_DEBUG] [CMD RESULT] (Empty output)");
+    }
+    
+    let err_lines: Vec<&str> = stderr.lines().collect();
+    let last_err = if err_lines.len() > 8 {
+        &err_lines[err_lines.len() - 8..]
+    } else {
+        &err_lines[..]
+    };
+    if !last_err.is_empty() {
+        println!("[TEMP_DEBUG] [CMD STDERR] Last lines:\n{}", last_err.join("\n"));
     }
     
     Ok(output)
@@ -58,6 +70,73 @@ struct GifStats {
     mode1_count: Option<usize>, // 第一众数出现次数
     mode2_fps: Option<f64>, // 第二众数帧率
     mode2_count: Option<usize>, // 第二众数出现次数
+}
+
+#[derive(Debug, Deserialize)]
+struct VideoToGifOptions {
+    fps: Option<f64>,
+    quality: Option<u8>,
+    max_width: Option<u32>,
+    width: Option<u32>,
+    height: Option<u32>,
+    start_time_sec: Option<f64>,
+    end_time_sec: Option<f64>,
+    high_quality_palette: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct VideoMetadata {
+    duration_sec: f64,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VideoConvertStatus {
+    status: String,
+    message: Option<String>,
+    output_path: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct VideoConvertJob {
+    status: String,
+    message: Option<String>,
+    output_path: Option<String>,
+    error: Option<String>,
+    cancelled: bool,
+}
+
+static VIDEO_CONVERT_JOBS: LazyLock<Mutex<HashMap<String, VideoConvertJob>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn update_video_job(job_id: &str, status: &str, message: Option<String>, output_path: Option<String>, error: Option<String>, cancelled: Option<bool>) {
+    if let Ok(mut jobs) = VIDEO_CONVERT_JOBS.lock() {
+        if let Some(job) = jobs.get_mut(job_id) {
+            job.status = status.to_string();
+            if message.is_some() {
+                job.message = message;
+            }
+            if output_path.is_some() {
+                job.output_path = output_path;
+            }
+            if error.is_some() {
+                job.error = error;
+            }
+            if let Some(c) = cancelled {
+                job.cancelled = c;
+            }
+        }
+    }
+}
+
+fn is_video_job_cancelled(job_id: &str) -> bool {
+    if let Ok(jobs) = VIDEO_CONVERT_JOBS.lock() {
+        if let Some(job) = jobs.get(job_id) {
+            return job.cancelled;
+        }
+    }
+    false
 }
 
 // 初始化工作目录
@@ -116,6 +195,465 @@ fn cleanup_work_dir(work_dir: String) -> Result<(), String> {
 fn get_file_size(path: String) -> Result<u64, String> {
     let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     Ok(metadata.len())
+}
+
+fn parse_duration_from_ffmpeg(line: &str) -> Option<f64> {
+    let after = line.split("Duration:").nth(1)?;
+    let token = after.split(',').next()?.trim();
+    if token == "N/A" {
+        return None;
+    }
+    let parts: Vec<&str> = token.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let h: f64 = parts[0].parse().ok()?;
+    let m: f64 = parts[1].parse().ok()?;
+    let s: f64 = parts[2].parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + s)
+}
+
+fn parse_resolution_from_ffmpeg(line: &str) -> Option<(u32, u32)> {
+    let mut best: Option<(u32, u32)> = None;
+    for token in line.split_whitespace() {
+        if token.contains('x') {
+            let cleaned: String = token
+                .chars()
+                .filter(|c| c.is_ascii_digit() || *c == 'x')
+                .collect();
+            if let Some((w, h)) = cleaned.split_once('x') {
+                if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                    if w > 0 && h > 0 {
+                        best = Some((w, h));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    best
+}
+
+#[tauri::command]
+fn get_video_metadata(video_path: String) -> Result<VideoMetadata, String> {
+    let input_path = PathBuf::from(&video_path);
+    if !input_path.exists() {
+        return Err("视频文件不存在".to_string());
+    }
+    let output = run_sidecar_with_logging("ffmpeg", vec!["-i".to_string(), video_path])?;
+    let stderr = output.stderr.as_str();
+    let stdout = output.stdout.as_str();
+    let combined = format!("{}\n{}", stderr, stdout);
+    let mut duration_sec: Option<f64> = None;
+    let mut resolution: Option<(u32, u32)> = None;
+    for line in combined.lines() {
+        if duration_sec.is_none() && line.contains("Duration:") {
+            duration_sec = parse_duration_from_ffmpeg(line);
+        }
+        if resolution.is_none() && line.contains("Video:") {
+            resolution = parse_resolution_from_ffmpeg(line);
+        }
+    }
+    if duration_sec.is_none() || resolution.is_none() {
+        let head: Vec<&str> = combined.lines().take(24).collect();
+        println!("[TEMP_DEBUG] [VIDEO META] 解析失败，输出前 24 行:\n{}", head.join("\n"));
+    }
+    let duration_sec = duration_sec.unwrap_or(0.0);
+    let (width, height) = resolution.unwrap_or((0, 0));
+    Ok(VideoMetadata {
+        duration_sec,
+        width,
+        height,
+    })
+}
+
+fn convert_video_to_gif_with_job(
+    job_id: &str,
+    video_path: String,
+    work_dir: String,
+    options: Option<VideoToGifOptions>,
+) -> Result<String, String> {
+    let input_path = PathBuf::from(&video_path);
+    if !input_path.exists() {
+        return Err("视频文件不存在".to_string());
+    }
+    if is_video_job_cancelled(job_id) {
+        return Err("已取消".to_string());
+    }
+    update_video_job(job_id, "running", Some("preparing workspace".to_string()), None, None, None);
+    let base_name = input_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video")
+        .to_string();
+    let mut safe_base = String::new();
+    for c in base_name.chars() {
+        if c.is_ascii_alphanumeric() {
+            safe_base.push(c);
+        } else {
+            safe_base.push('_');
+            safe_base.push_str(&(c as u32).to_string());
+        }
+    }
+    let work_dir_path = PathBuf::from(&work_dir);
+    fs::create_dir_all(&work_dir_path).map_err(|e| format!("创建工作目录失败: {}", e))?;
+    let frames_dir = work_dir_path.join(format!("_{}_video_frames", safe_base));
+    if frames_dir.exists() {
+        let _ = fs::remove_dir_all(&frames_dir);
+    }
+    fs::create_dir_all(&frames_dir).map_err(|e| format!("创建帧目录失败: {}", e))?;
+    let output_path = work_dir_path.join(format!("{}.gif", safe_base));
+    if output_path.exists() {
+        let _ = fs::remove_file(&output_path);
+    }
+    let fps = options.as_ref().and_then(|o| o.fps).unwrap_or(12.0);
+    let quality = options.as_ref().and_then(|o| o.quality).unwrap_or(80);
+    let max_width = options.as_ref().and_then(|o| o.max_width).unwrap_or(0);
+    let width = options.as_ref().and_then(|o| o.width).unwrap_or(0);
+    let height = options.as_ref().and_then(|o| o.height).unwrap_or(0);
+    let high_quality_palette = options
+        .as_ref()
+        .and_then(|o| o.high_quality_palette)
+        .unwrap_or(false);
+    let start_time_sec = options.as_ref().and_then(|o| o.start_time_sec);
+    let end_time_sec = options.as_ref().and_then(|o| o.end_time_sec);
+    let mut filter = format!("fps={:.3}", fps);
+    if width > 0 || height > 0 {
+        let w = if width > 0 { width.to_string() } else { "-1".to_string() };
+        let h = if height > 0 { height.to_string() } else { "-1".to_string() };
+        filter = format!("{},scale={}:{}:flags=lanczos", filter, w, h);
+    } else if max_width > 0 {
+        filter = format!("{},scale='min(iw,{})':-1:flags=lanczos", filter, max_width);
+    }
+    if high_quality_palette {
+        let palette_path = frames_dir.join("palette.png");
+        let mut palette_args = vec!["-y".to_string()];
+        if let Some(start) = start_time_sec {
+            if start > 0.0 {
+                palette_args.push("-ss".to_string());
+                palette_args.push(format!("{:.3}", start));
+            }
+        }
+        palette_args.extend(vec!["-i".to_string(), video_path.clone()]);
+        if let (Some(start), Some(end)) = (start_time_sec, end_time_sec) {
+            if end > start {
+                let duration = end - start;
+                palette_args.push("-t".to_string());
+                palette_args.push(format!("{:.3}", duration));
+            }
+        }
+        update_video_job(job_id, "running", Some("generating palette".to_string()), None, None, None);
+        palette_args.extend(vec![
+            "-vf".to_string(),
+            format!("{},palettegen=stats_mode=full", filter),
+            palette_path.to_str().unwrap().to_string(),
+        ]);
+        let palette_output = run_sidecar_with_logging("ffmpeg", palette_args)?;
+        if !palette_output.status.success() {
+            return Err(format!("ffmpeg 调色板生成失败: {}", palette_output.stderr.as_str()));
+        }
+        if is_video_job_cancelled(job_id) {
+            let _ = fs::remove_dir_all(&frames_dir);
+            return Err("已取消".to_string());
+        }
+        let mut gif_args = vec!["-y".to_string()];
+        if let Some(start) = start_time_sec {
+            if start > 0.0 {
+                gif_args.push("-ss".to_string());
+                gif_args.push(format!("{:.3}", start));
+            }
+        }
+        gif_args.extend(vec!["-i".to_string(), video_path]);
+        if let (Some(start), Some(end)) = (start_time_sec, end_time_sec) {
+            if end > start {
+                let duration = end - start;
+                gif_args.push("-t".to_string());
+                gif_args.push(format!("{:.3}", duration));
+            }
+        }
+        gif_args.extend(vec!["-i".to_string(), palette_path.to_str().unwrap().to_string()]);
+        update_video_job(job_id, "running", Some("applying palette".to_string()), None, None, None);
+        gif_args.extend(vec![
+            "-lavfi".to_string(),
+            format!("{},paletteuse=dither=bayer:bayer_scale=5", filter),
+            output_path.to_str().unwrap().to_string(),
+        ]);
+        let gif_output = run_sidecar_with_logging("ffmpeg", gif_args)?;
+        if !gif_output.status.success() {
+            return Err(format!("ffmpeg 调色板应用失败: {}", gif_output.stderr.as_str()));
+        }
+        update_video_job(job_id, "running", Some("cleaning up".to_string()), None, None, None);
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Ok(output_path.to_str().unwrap().to_string());
+    }
+    let frame_pattern = frames_dir.join("frame_%05d.png");
+    let mut ffmpeg_args = vec!["-y".to_string()];
+    if let Some(start) = start_time_sec {
+        if start > 0.0 {
+            ffmpeg_args.push("-ss".to_string());
+            ffmpeg_args.push(format!("{:.3}", start));
+        }
+    }
+    ffmpeg_args.extend(vec!["-i".to_string(), video_path]);
+    if let (Some(start), Some(end)) = (start_time_sec, end_time_sec) {
+        if end > start {
+            let duration = end - start;
+            ffmpeg_args.push("-t".to_string());
+            ffmpeg_args.push(format!("{:.3}", duration));
+        }
+    }
+    update_video_job(job_id, "running", Some("extracting frames".to_string()), None, None, None);
+    ffmpeg_args.extend(vec![
+        "-vf".to_string(),
+        filter,
+        "-vsync".to_string(),
+        "0".to_string(),
+        frame_pattern.to_str().unwrap().to_string(),
+    ]);
+    let ffmpeg_output = run_sidecar_with_logging("ffmpeg", ffmpeg_args)?;
+    if !ffmpeg_output.status.success() {
+        return Err(format!("ffmpeg 转码失败: {}", ffmpeg_output.stderr.as_str()));
+    }
+    if is_video_job_cancelled(job_id) {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err("已取消".to_string());
+    }
+    let mut frames: Vec<PathBuf> = fs::read_dir(&frames_dir)
+        .map_err(|e| format!("读取帧目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.extension()
+                .and_then(|s| s.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("png"))
+                .unwrap_or(false)
+        })
+        .collect();
+    frames.sort_by_key(|p| p.file_name().map(|s| s.to_string_lossy().to_string()));
+    if frames.is_empty() {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err("未能从视频中提取帧".to_string());
+    }
+    let mut gifski_args = vec![
+        "-o".to_string(),
+        output_path.to_str().unwrap().to_string(),
+        "-Q".to_string(),
+        quality.to_string(),
+        "-r".to_string(),
+        format!("{:.2}", fps),
+    ];
+    for frame in frames {
+        gifski_args.push(frame.to_str().unwrap().to_string());
+    }
+    if is_video_job_cancelled(job_id) {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err("已取消".to_string());
+    }
+    update_video_job(job_id, "running", Some("converting to gif".to_string()), None, None, None);
+    let gifski_output = run_sidecar_with_logging("gifski", gifski_args)?;
+    if !gifski_output.status.success() {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err(format!("gifski 编码失败: {}", gifski_output.stderr.as_str()));
+    }
+    update_video_job(job_id, "running", Some("cleaning up".to_string()), None, None, None);
+    let _ = fs::remove_dir_all(&frames_dir);
+    Ok(output_path.to_str().unwrap().to_string())
+}
+
+#[tauri::command]
+fn start_video_to_gif(
+    app: tauri::AppHandle,
+    video_path: String,
+    work_dir: String,
+    options: Option<VideoToGifOptions>,
+) -> Result<String, String> {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    let job_id = format!("video-{}-{}", std::process::id(), ts);
+    {
+        let mut jobs = VIDEO_CONVERT_JOBS.lock().map_err(|e| e.to_string())?;
+        jobs.insert(
+            job_id.clone(),
+            VideoConvertJob {
+                status: "running".to_string(),
+                message: Some("准备中".to_string()),
+                output_path: None,
+                error: None,
+                cancelled: false,
+            },
+        );
+    }
+    let job_id_clone = job_id.clone();
+    std::thread::spawn(move || {
+        update_video_job(&job_id_clone, "running", Some("处理中".to_string()), None, None, None);
+        let res = convert_video_to_gif_with_job(&job_id_clone, video_path, work_dir, options);
+        match res {
+            Ok(path) => {
+                if is_video_job_cancelled(&job_id_clone) {
+                    update_video_job(&job_id_clone, "cancelled", Some("已取消".to_string()), None, None, Some(true));
+                } else {
+                    update_video_job(&job_id_clone, "done", Some("完成".to_string()), Some(path), None, None);
+                }
+            }
+            Err(err) => {
+                if err == "已取消" {
+                    update_video_job(&job_id_clone, "cancelled", Some("已取消".to_string()), None, None, Some(true));
+                } else {
+                    update_video_job(&job_id_clone, "error", Some("失败".to_string()), None, Some(err), None);
+                }
+            }
+        }
+        let _ = app.emit_all("video-import-status", serde_json::json!({
+            "jobId": job_id_clone
+        }));
+    });
+    Ok(job_id)
+}
+
+#[tauri::command]
+fn get_video_to_gif_status(job_id: String) -> Result<VideoConvertStatus, String> {
+    let jobs = VIDEO_CONVERT_JOBS.lock().map_err(|e| e.to_string())?;
+    let job = jobs.get(&job_id).ok_or_else(|| "任务不存在".to_string())?;
+    Ok(VideoConvertStatus {
+        status: job.status.clone(),
+        message: job.message.clone(),
+        output_path: job.output_path.clone(),
+        error: job.error.clone(),
+    })
+}
+
+#[tauri::command]
+fn cancel_video_to_gif(job_id: String) -> Result<(), String> {
+    let mut jobs = VIDEO_CONVERT_JOBS.lock().map_err(|e| e.to_string())?;
+    if let Some(job) = jobs.get_mut(&job_id) {
+        job.cancelled = true;
+        job.status = "cancelled".to_string();
+        job.message = Some("已取消".to_string());
+        return Ok(());
+    }
+    Err("任务不存在".to_string())
+}
+
+#[tauri::command]
+fn convert_video_to_gif(
+    video_path: String,
+    work_dir: String,
+    options: Option<VideoToGifOptions>,
+) -> Result<String, String> {
+    let input_path = PathBuf::from(&video_path);
+    if !input_path.exists() {
+        return Err("视频文件不存在".to_string());
+    }
+    let base_name = input_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video")
+        .to_string();
+    let mut safe_base = String::new();
+    for c in base_name.chars() {
+        if c.is_ascii_alphanumeric() {
+            safe_base.push(c);
+        } else {
+            safe_base.push('_');
+            safe_base.push_str(&(c as u32).to_string());
+        }
+    }
+    let work_dir_path = PathBuf::from(&work_dir);
+    fs::create_dir_all(&work_dir_path).map_err(|e| format!("创建工作目录失败: {}", e))?;
+    let frames_dir = work_dir_path.join(format!("_{}_video_frames", safe_base));
+    if frames_dir.exists() {
+        let _ = fs::remove_dir_all(&frames_dir);
+    }
+    fs::create_dir_all(&frames_dir).map_err(|e| format!("创建帧目录失败: {}", e))?;
+    let output_path = work_dir_path.join(format!("{}.gif", safe_base));
+    if output_path.exists() {
+        let _ = fs::remove_file(&output_path);
+    }
+    let fps = options.as_ref().and_then(|o| o.fps).unwrap_or(12.0);
+    let quality = options.as_ref().and_then(|o| o.quality).unwrap_or(80);
+    let max_width = options.as_ref().and_then(|o| o.max_width).unwrap_or(0);
+    let width = options.as_ref().and_then(|o| o.width).unwrap_or(0);
+    let height = options.as_ref().and_then(|o| o.height).unwrap_or(0);
+    let start_time_sec = options.as_ref().and_then(|o| o.start_time_sec);
+    let end_time_sec = options.as_ref().and_then(|o| o.end_time_sec);
+    let mut filter = format!("fps={:.3}", fps);
+    if width > 0 || height > 0 {
+        let w = if width > 0 { width.to_string() } else { "-1".to_string() };
+        let h = if height > 0 { height.to_string() } else { "-1".to_string() };
+        filter = format!("{},scale={}:{}:flags=lanczos", filter, w, h);
+    } else if max_width > 0 {
+        filter = format!("{},scale='min(iw,{})':-1:flags=lanczos", filter, max_width);
+    }
+    let frame_pattern = frames_dir.join("frame_%05d.png");
+    let mut ffmpeg_args = vec![
+        "-y".to_string(),
+    ];
+    if let Some(start) = start_time_sec {
+        if start > 0.0 {
+            ffmpeg_args.push("-ss".to_string());
+            ffmpeg_args.push(format!("{:.3}", start));
+        }
+    }
+    ffmpeg_args.extend(vec![
+        "-i".to_string(),
+        video_path,
+    ]);
+    if let (Some(start), Some(end)) = (start_time_sec, end_time_sec) {
+        if end > start {
+            let duration = end - start;
+            ffmpeg_args.push("-t".to_string());
+            ffmpeg_args.push(format!("{:.3}", duration));
+        }
+    }
+    ffmpeg_args.extend(vec![
+        "-vf".to_string(),
+        filter,
+        "-vsync".to_string(),
+        "0".to_string(),
+        frame_pattern.to_str().unwrap().to_string(),
+    ]);
+    let ffmpeg_output = run_sidecar_with_logging("ffmpeg", ffmpeg_args)?;
+    if !ffmpeg_output.status.success() {
+        return Err(format!("ffmpeg 转码失败: {}", ffmpeg_output.stderr.as_str()));
+    }
+    let mut frames: Vec<PathBuf> = fs::read_dir(&frames_dir)
+        .map_err(|e| format!("读取帧目录失败: {}", e))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            p.extension()
+                .and_then(|s| s.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("png"))
+                .unwrap_or(false)
+        })
+        .collect();
+    frames.sort_by_key(|p| p.file_name().map(|s| s.to_string_lossy().to_string()));
+    if frames.is_empty() {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err("未能从视频中提取帧".to_string());
+    }
+    let mut gifski_args = vec![
+        "-o".to_string(),
+        output_path.to_str().unwrap().to_string(),
+        "-Q".to_string(),
+        quality.to_string(),
+        "-r".to_string(),
+        format!("{:.2}", fps),
+    ];
+    for frame in frames {
+        gifski_args.push(frame.to_str().unwrap().to_string());
+    }
+    let gifski_output = run_sidecar_with_logging("gifski", gifski_args)?;
+    if !gifski_output.status.success() {
+        let _ = fs::remove_dir_all(&frames_dir);
+        return Err(format!("gifski 编码失败: {}", gifski_output.stderr.as_str()));
+    }
+    let _ = fs::remove_dir_all(&frames_dir);
+    Ok(output_path.to_str().unwrap().to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2399,6 +2937,11 @@ fn main() {
             get_file_size,
             read_file_in_chunks,
             read_file_to_workdir,
+            get_video_metadata,
+            start_video_to_gif,
+            get_video_to_gif_status,
+            cancel_video_to_gif,
+            convert_video_to_gif,
             parse_gif_preview,
             extract_gif_frames_full,
             get_gif_frame_data,

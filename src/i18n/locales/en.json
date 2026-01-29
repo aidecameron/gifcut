@@ -7,7 +7,8 @@
     "loadWorkspace": "Load Workspace",
     "saveWorkspace": "Save Workspace",
     "export": "Export",
-    "saveResult": "Save Result"
+    "saveResult": "Save Result",
+    "importVideo": "Import From Video"
   },
   "stats": {
     "fileSummary": "File Summary",
@@ -191,7 +192,9 @@
     "parsingDelays": "Parsing delays and preparing directory...",
     "buildingPlaceholders": "Building timeline placeholders...",
     "parsingFramesWithCount": "Parsing GIF frames {{current}}/{{total}}...",
-    "preparingFiles": "Preparing files..."
+    "preparingFiles": "Preparing files...",
+    "generatingPalette": "Generating palette",
+    "applyingPalette": "Applying palette"
   },
   "parser": {
     "init": "Initializing...",
@@ -215,6 +218,28 @@
     "loadError": "Preview load failed: {{error}}",
     "generateError": "Preview generation failed: {{error}}",
     "loadPathError": "Preview GIF load failed, please check file path"
+  },
+  "videoImport": {
+    "title": "Import From Video",
+    "duration": "Duration",
+    "resolution": "Resolution",
+    "fps": "FPS",
+    "quality": "Color Quality",
+    "qualityHint": "1-100. Higher means better quality but larger size",
+    "timeRange": "Time Range",
+    "start": "Start",
+    "end": "End",
+    "size": "Resolution",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "aspectLock": "Lock Aspect Ratio",
+    "aspectRatio": "{{width}}×{{height}}",
+    "highQualityPalette": "High-quality palette",
+    "statusIdle": "Idle",
+    "statusProcessing": "Processing",
+    "statusDone": "Done",
+    "statusError": "Error",
+    "statusCancelled": "Cancelled"
   },
   "workspace": {
     "noVersions": "No results to save",

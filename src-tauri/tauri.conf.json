@@ -52,6 +52,11 @@
             "name": "gifski",
             "cmd": "gifski",
             "sidecar": true
+          },
+          {
+            "name": "ffmpeg",
+            "cmd": "ffmpeg",
+            "sidecar": true
           }
         ]
       }
@@ -59,7 +64,7 @@
     "bundle": {
       "active": true,
       "targets": "all",
-      "identifier": "com.jblogs.gif-editor",
+      "identifier": "com.aidecameron.gifcut",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",
@@ -68,7 +73,7 @@
         "icons/icon.ico"
       ],
       "resources": [],
-      "externalBin": ["../binaries/bin/gifsicle", "../binaries/bin/gifski"]
+      "externalBin": ["../binaries/bin/gifsicle", "../binaries/bin/gifski", "../binaries/bin/ffmpeg"]
     },
     "security": {
       "csp": null

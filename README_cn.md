@@ -52,7 +52,7 @@
 3. 您会看到一条消息提示 "GifCut" 被阻止打开，点击 **“仍要打开”**。
 4. 在弹出的确认框中点击 **“打开”**。
 
-运行下面的命令：
+如系统弹窗，报告应用损坏，需运行下面的命令：
 
 ```bash
 sudo xattr -d com.apple.quarantine /Applications/GifCut.app
@@ -93,3 +93,5 @@ sudo xattr -d com.apple.quarantine /Applications/GifCut.app
 <a href="https://www.flaticon.com/free-icons/gif" title="gif icons">Gif icons created by Alfredo Hernandez - Flaticon</a>
 <a href="https://www.flaticon.com/free-icons/format-file" title="format file icons">Format file icons created by Steven Edward Simanjuntak - Flaticon</a>
 <a href="https://www.flaticon.com/free-icons/ui" title="ui icons">Ui icons created by Freepik - Flaticon</a>
+
+<a href="https://www.flaticon.com/free-icons/ui" title="ui icons">Ui icons created by Azland Studio - Flaticon</a>

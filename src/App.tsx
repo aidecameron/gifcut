@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GifPlayer } from './components/GifPlayer';
 import { FrameTimeline } from './components/FrameTimeline';
@@ -35,6 +35,138 @@ interface GifStats {
   mode2_fps?: number; // 第二众数帧率
   mode2_count?: number; // 第二众数出现次数
 }
+
+interface VideoConvertStatus {
+  status: string;
+  message?: string;
+  output_path?: string;
+  error?: string;
+}
+
+type RangeSliderProps = {
+  min: number;
+  max: number;
+  start: number;
+  end: number;
+  onChange: (start: number, end: number) => void;
+  disabled?: boolean;
+};
+
+const VideoRangeSlider = ({ min, max, start, end, onChange, disabled }: RangeSliderProps) => {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const [dragging, setDragging] = useState<'start' | 'end' | null>(null);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const pointerIdRef = useRef<number | null>(null);
+  const range = Math.max(1, max - min);
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const startPct = ((start - min) / range) * 100;
+  const endPct = ((end - min) / range) * 100;
+  const segLeft = clamp(startPct, 0, 100);
+  const segWidth = clamp(endPct - startPct, 0, 100);
+  const handleMove = (clientX: number) => {
+    if (!rect || !dragging) return;
+    const dx = clamp(clientX - rect.left, 0, rect.width);
+    const ratio = rect.width > 0 ? dx / rect.width : 0;
+    const nextSec = Math.round(min + ratio * (max - min));
+    if (dragging === 'start') {
+      const s = clamp(nextSec, min, end);
+      onChange(s, end);
+    } else {
+      const e = clamp(nextSec, start, max);
+      onChange(start, e);
+    }
+  };
+  const beginDrag = (e: ReactPointerEvent, kind: 'start' | 'end') => {
+    if (disabled) return;
+    setDragging(kind);
+    setRect(trackRef.current?.getBoundingClientRect() || null);
+    pointerIdRef.current = e.pointerId;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    handleMove(e.clientX);
+  };
+  const onPointerMove = (e: ReactPointerEvent) => {
+    if (pointerIdRef.current !== e.pointerId) return;
+    handleMove(e.clientX);
+  };
+  const endDrag = (e: ReactPointerEvent) => {
+    if (pointerIdRef.current !== e.pointerId) return;
+    pointerIdRef.current = null;
+    setDragging(null);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+  };
+  return (
+    <div ref={trackRef} style={{ position: 'relative', height: 36, touchAction: 'none' }}>
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: '50%',
+          height: 6,
+          borderRadius: 6,
+          background: '#e6e6e6',
+          transform: 'translateY(-50%)',
+        }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          left: `${segLeft}%`,
+          width: `${segWidth}%`,
+          top: '50%',
+          height: 6,
+          borderRadius: 6,
+          background: '#4d7cff',
+          transform: 'translateY(-50%)',
+        }}
+      />
+      <div
+        role="button"
+        onPointerDown={(e) => beginDrag(e, 'start')}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{
+          position: 'absolute',
+          left: `calc(${segLeft}% - 8px)`,
+          top: '50%',
+          width: 16,
+          height: 16,
+          borderRadius: 16,
+          background: '#4d7cff',
+          transform: 'translateY(-50%)',
+          cursor: disabled ? 'not-allowed' : 'grab',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+          touchAction: 'none',
+          zIndex: 2,
+        }}
+      />
+      <div
+        role="button"
+        onPointerDown={(e) => beginDrag(e, 'end')}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{
+          position: 'absolute',
+          left: `calc(${segLeft + segWidth}% - 8px)`,
+          top: '50%',
+          width: 16,
+          height: 16,
+          borderRadius: 16,
+          background: '#4d7cff',
+          transform: 'translateY(-50%)',
+          cursor: disabled ? 'not-allowed' : 'grab',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+          touchAction: 'none',
+          zIndex: 2,
+        }}
+      />
+    </div>
+  );
+};
 
 function App() {
   const { t } = useTranslation();
@@ -80,6 +212,25 @@ function App() {
   const [previewGifUrl, setPreviewGifUrl] = useState<string | null>(null);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewModalGifUrl, setPreviewModalGifUrl] = useState<string | null>(null);
+  const [showVideoImportModal, setShowVideoImportModal] = useState(false);
+  const [videoImportPath, setVideoImportPath] = useState<string>('');
+  const [videoMeta, setVideoMeta] = useState<{ durationSec: number; width: number; height: number } | null>(null);
+  const [videoImportJobId, setVideoImportJobId] = useState<string | null>(null);
+  const [videoImportStatus, setVideoImportStatus] = useState<VideoConvertStatus | null>(null);
+  const [isVideoImporting, setIsVideoImporting] = useState(false);
+  const [isAspectLocked, setIsAspectLocked] = useState(true);
+  const videoAspectRatioRef = useRef<number>(1);
+  const [videoImportOptions, setVideoImportOptions] = useState({
+    fps: 12,
+    quality: 80,
+    startMin: 0,
+    startSec: 0,
+    endMin: 0,
+    endSec: 0,
+    width: 0,
+    height: 0,
+    highQualityPalette: true,
+  });
   
   // 使用 ref 跟踪当前的 Blob URL，以便在组件卸载时清理
   const previewModalGifUrlRef = useRef<string | null>(null);
@@ -132,6 +283,109 @@ function App() {
     return ((f % 2 === 0) ? f : f + 1) * 10;
   };
 
+  const loadGifIntoWorkspace = async (destPath: string, workDirPath: string, knownFileSize: number) => {
+    const fileName = destPath.split(/[/\\]/).pop() || 'image.gif';
+    const { placeholders, dims, meta, fileSize: loadedFileSize } = await loadGifForEditing(destPath, workDirPath);
+    setFrames(placeholders);
+    setOriginalFrames(JSON.parse(JSON.stringify(placeholders.map((f: GifFrame) => ({ delay: f.delay })))));
+    setDimensions(dims);
+    setResizeWidth(dims.width || 0);
+    setResizeHeight(dims.height || 0);
+    setCurrentFrame(0);
+    setRangeStart(0);
+    setRangeEnd(placeholders.length - 1);
+    setSegmentRangeStart(0);
+    setSegmentRangeEnd(placeholders.length - 1);
+    const totalDuration = placeholders.reduce((sum, f) => sum + f.delay, 0);
+    const initialVersion: VersionItem = {
+      id: 'original',
+      name: fileName,
+      path: destPath,
+      timestamp: Date.now(),
+      isOriginal: true,
+      frameCount: meta.frame_count,
+      duration: totalDuration,
+      fileSize: loadedFileSize || knownFileSize,
+      frameDelays: placeholders.map(f => f.delay),
+    };
+    setVersions([initialVersion]);
+    setCurrentVersionId('original');
+    setHasUnsavedChanges(false);
+    const fpsList = meta.delays_ms.map(d => 1000 / (d || 10));
+    const counts: Record<number, number> = {};
+    fpsList.forEach(fps => {
+      const rounded = Math.round(fps);
+      counts[rounded] = (counts[rounded] || 0) + 1;
+    });
+    const sortedFps = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const stats: GifStats = {
+      frame_count: meta.frame_count,
+      total_duration: totalDuration / 1000,
+      avg_fps: totalDuration > 0 ? meta.frame_count / (totalDuration / 1000) : 0,
+      min_fps: Math.min(...fpsList),
+      max_fps: Math.max(...fpsList),
+      file_size: loadedFileSize || knownFileSize,
+      mode1_fps: sortedFps[0] ? Number(sortedFps[0][0]) : undefined,
+      mode1_count: sortedFps[0] ? sortedFps[0][1] : undefined,
+      mode2_fps: sortedFps[1] ? Number(sortedFps[1][0]) : undefined,
+      mode2_count: sortedFps[1] ? sortedFps[1][1] : undefined,
+    };
+    setGifStats(stats);
+    try {
+      const otherGifs = await invoke<string[]>('read_dir_filenames', { path: workDirPath });
+      const gifFiles = otherGifs.filter(name => {
+        const lowerName = name.toLowerCase();
+        const isTempFile = name.startsWith('_temp_') || name.includes('_temp_');
+        const isGif = lowerName.endsWith('.gif');
+        const isCurrentFile = name === fileName;
+        return isGif && !isTempFile && !isCurrentFile;
+      });
+      if (gifFiles.length > 0) {
+        const otherVersions: VersionItem[] = [];
+        for (const gifFile of gifFiles) {
+          try {
+            const gifPath = workDirPath.endsWith('/') || workDirPath.endsWith('\\') 
+              ? `${workDirPath}${gifFile}` 
+              : `${workDirPath}/${gifFile}`;
+            const normalizedGifPath = gifPath.replace(/\\/g, '/');
+            const normalizedCurrentPath = initialVersion.path.replace(/\\/g, '/');
+            if (normalizedGifPath === normalizedCurrentPath) {
+              continue;
+            }
+            let fileSize = 0;
+            try {
+              fileSize = await invoke<number>('get_file_size', { path: gifPath });
+            } catch {}
+            try {
+              const meta = await invoke<{ width: number; height: number; frame_count: number; delays_ms: number[]; preview_dir: string; preview_files: string[]; preview_width: number; preview_height: number }>('parse_gif_preview', {
+                gifPath: gifPath,
+                workDir: workDirPath,
+                maxPreview: 120,
+              });
+              const totalDuration = meta.delays_ms.reduce((sum: number, d: number) => sum + d, 0);
+              const versionId = `workdir-${gifFile.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now()}`;
+              otherVersions.push({
+                id: versionId,
+                name: gifFile,
+                path: gifPath,
+                timestamp: Date.now(),
+                isOriginal: false,
+                frameCount: meta.frame_count,
+                duration: totalDuration,
+                fileSize: fileSize,
+                frameDelays: meta.delays_ms,
+              });
+            } catch (err) {
+              console.error(`[TEMP_DEBUG] 无法解析 GIF ${gifFile}:`, err);
+            }
+          } catch {}
+        }
+        if (otherVersions.length > 0) {
+          setVersions(prev => [...prev, ...otherVersions]);
+        }
+      }
+    } catch {}
+  };
   const minDelayCap = useMemo(() => {
     if (!frames || frames.length === 0) return 10;
     const freq = new Map<number, number>();
@@ -1495,11 +1749,10 @@ function App() {
       } catch {}
       
       
-      let fileSize = 0;
       let knownTotal = 0;
       try { knownTotal = await invoke<number>('get_file_size', { path: selectedPath }); } catch {}
       setGifLoadingProgress({ stage: 'read', current: 0, total: knownTotal || 1 });
-      const fileName = selectedPath.split(/[/\\]/).pop() || 'image.gif';
+      const sourceFileName = selectedPath.split(/[/\\]/).pop() || 'image.gif';
       readingActiveRef.current = true;
       const copyFileStartTime = performance.now();
       const destPath = await invoke<string>('read_file_to_workdir', {
@@ -1507,14 +1760,15 @@ function App() {
         srcPath: selectedPath,
         work_dir: workDirPath,
         workDir: workDirPath,
-        filename: fileName,
-        fileName: fileName,
+        filename: sourceFileName,
+        fileName: sourceFileName,
         chunk_size: 1024 * 512,
         chunkSize: 1024 * 512,
       });
       const copyFileDuration = performance.now() - copyFileStartTime;
       console.log(`[TEMP_DEBUG] 步骤: 复制文件到工作目录, 耗时: ${copyFileDuration.toFixed(2)}ms (${(knownTotal / 1024 / 1024).toFixed(2)}MB)`);
       readingActiveRef.current = false;
+      let fileSize = 0;
       try { fileSize = await invoke<number>('get_file_size', { path: destPath }); } catch { fileSize = knownTotal || 0; }
       try { sessionStorage.setItem('lastGifPath', destPath); } catch {}
       try { sessionStorage.setItem('lastSourcePath', selectedPath); } catch {}
@@ -1527,147 +1781,8 @@ function App() {
           console.log('[TEMP_DEBUG] 命中磁盘延迟缓存');
         }
       } catch {}
-      
-      // 调用 unified loader
-      const { placeholders, dims, meta, fileSize: loadedFileSize } = await loadGifForEditing(destPath, workDirPath);
-      
-      // 更新状态
-      setFrames(placeholders);
-      setOriginalFrames(JSON.parse(JSON.stringify(placeholders.map((f: GifFrame) => ({ delay: f.delay })))));
-      setDimensions(dims);
-      setResizeWidth(dims.width || 0);
-      setResizeHeight(dims.height || 0);
-      setCurrentFrame(0);
-      setRangeStart(0);
-      setRangeEnd(placeholders.length - 1);
-      setSegmentRangeStart(0);
-      setSegmentRangeEnd(placeholders.length - 1);
-      
-      const totalDuration = placeholders.reduce((sum, f) => sum + f.delay, 0);
-      const initialVersion: VersionItem = {
-        id: 'original',
-        name: fileName,
-        path: destPath,
-        timestamp: Date.now(),
-        isOriginal: true,
-        frameCount: meta.frame_count,
-        duration: totalDuration,
-        fileSize: loadedFileSize || fileSize,
-        frameDelays: placeholders.map(f => f.delay),
-      };
-      setVersions([initialVersion]);
-      setCurrentVersionId('original');
-      setHasUnsavedChanges(false);
 
-      // 计算并设置 GifStats
-      const fpsList = meta.delays_ms.map(d => 1000 / (d || 10));
-      const counts: Record<number, number> = {};
-      fpsList.forEach(fps => {
-        const rounded = Math.round(fps);
-        counts[rounded] = (counts[rounded] || 0) + 1;
-      });
-      const sortedFps = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-      
-      const stats: GifStats = {
-        frame_count: meta.frame_count,
-        total_duration: totalDuration / 1000,
-        avg_fps: totalDuration > 0 ? meta.frame_count / (totalDuration / 1000) : 0,
-        min_fps: Math.min(...fpsList),
-        max_fps: Math.max(...fpsList),
-        file_size: loadedFileSize || fileSize,
-        mode1_fps: sortedFps[0] ? Number(sortedFps[0][0]) : undefined,
-        mode1_count: sortedFps[0] ? sortedFps[0][1] : undefined,
-        mode2_fps: sortedFps[1] ? Number(sortedFps[1][0]) : undefined,
-        mode2_count: sortedFps[1] ? sortedFps[1][1] : undefined,
-      };
-      setGifStats(stats);
-            
-      // 扫描临时目录下的其他 GIF 文件并添加到成果列表
-      try {
-        const otherGifs = await invoke<string[]>('read_dir_filenames', { path: workDirPath });
-        const gifFiles = otherGifs.filter(name => {
-          const lowerName = name.toLowerCase();
-          // 排除临时文件（以 _temp_ 开头或包含 _temp_）
-          const isTempFile = name.startsWith('_temp_') || name.includes('_temp_');
-          // 只保留 .gif 文件
-          const isGif = lowerName.endsWith('.gif');
-          // 排除当前已加载的文件（通过文件名比较）
-          const isCurrentFile = name === fileName;
-          return isGif && !isTempFile && !isCurrentFile;
-        });
-        
-        if (gifFiles.length > 0) {
-          console.log('[TEMP_DEBUG] 发现临时目录下的其他 GIF 文件:', gifFiles);
-          
-          // 为每个 GIF 文件创建 VersionItem
-          const otherVersions: VersionItem[] = [];
-          for (const gifFile of gifFiles) {
-            try {
-              // 使用路径分隔符构建完整路径
-              const gifPath = workDirPath.endsWith('/') || workDirPath.endsWith('\\') 
-                ? `${workDirPath}${gifFile}` 
-                : `${workDirPath}/${gifFile}`;
-              
-              // 规范化路径用于比较
-              const normalizedGifPath = gifPath.replace(/\\/g, '/');
-              const normalizedCurrentPath = initialVersion.path.replace(/\\/g, '/');
-              
-              // 检查是否已经在成果列表中
-              if (normalizedGifPath === normalizedCurrentPath) {
-                continue;
-              }
-              
-              // 获取文件大小
-              let fileSize = 0;
-              try {
-                fileSize = await invoke<number>('get_file_size', { path: gifPath });
-              } catch {}
-              
-              // 获取 GIF 元数据
-              try {
-                const meta = await invoke<{ width: number; height: number; frame_count: number; delays_ms: number[]; preview_dir: string; preview_files: string[]; preview_width: number; preview_height: number }>('parse_gif_preview', {
-                  gifPath: gifPath,
-                  workDir: workDirPath,
-                  maxPreview: 120,
-                });
-                
-                const totalDuration = meta.delays_ms.reduce((sum: number, d: number) => sum + d, 0);
-                const versionId = `workdir-${gifFile.replace(/[^a-zA-Z0-9]/g, '_')}-${Date.now()}`;
-                otherVersions.push({
-                  id: versionId,
-                  name: gifFile,
-                  path: gifPath,
-                  timestamp: Date.now(),
-                  isOriginal: false,
-                  frameCount: meta.frame_count,
-                  duration: totalDuration,
-                  fileSize: fileSize,
-                  frameDelays: meta.delays_ms,
-                });
-              } catch (err) {
-                console.error(`[TEMP_DEBUG] 无法解析 GIF ${gifFile}:`, err);
-              }
-            } catch (err) {
-              console.error(`[TEMP_DEBUG] 处理 GIF ${gifFile} 时出错:`, err);
-            }
-          }
-          
-          // 将其他 GIF 添加到成果列表
-          if (otherVersions.length > 0) {
-            setVersions(prev => {
-              const existingPaths = new Set(prev.map(v => v.path));
-              const newVersions = otherVersions.filter(v => !existingPaths.has(v.path));
-              if (newVersions.length > 0) {
-                return [prev[0], ...newVersions, ...prev.slice(1)];
-              }
-              return prev;
-            });
-            console.log('[TEMP_DEBUG] 已将', otherVersions.length, '个其他 GIF 添加到成果列表');
-          }
-        }
-      } catch (err) {
-        console.error('[TEMP_DEBUG] 扫描临时目录失败:', err);
-      }
+      await loadGifIntoWorkspace(destPath, workDirPath, fileSize);
       
       // 界面完全显示
       setLoading(false);
@@ -1684,6 +1799,172 @@ function App() {
     } finally {
       
     }
+  };
+
+  const handleImportVideo = async () => {
+    try {
+      console.log('[TEMP_DEBUG] 开始视频导入：选择文件');
+      const { open } = await import('@tauri-apps/api/dialog');
+      const selectedPath = await open({
+        filters: [{
+          name: 'Video',
+          extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'mpeg', 'mpg']
+        }],
+        multiple: false
+      });
+      if (!selectedPath || typeof selectedPath !== 'string') {
+        return;
+      }
+      console.log('[TEMP_DEBUG] 已选择视频文件:', selectedPath);
+      const meta = await invoke<{ duration_sec: number; width: number; height: number }>('get_video_metadata', {
+        video_path: selectedPath,
+        videoPath: selectedPath,
+      });
+      console.log('[TEMP_DEBUG] 获取视频元信息:', meta);
+      const durationSec = Math.max(0, meta.duration_sec || 0);
+      const endMin = Math.floor(durationSec / 60);
+      const endSec = Math.floor(durationSec - endMin * 60);
+      const ratio = meta.width > 0 && meta.height > 0 ? meta.width / meta.height : 1;
+      setVideoImportPath(selectedPath);
+      setVideoMeta({ durationSec, width: meta.width, height: meta.height });
+      videoAspectRatioRef.current = ratio;
+      setIsAspectLocked(true);
+      setVideoImportOptions({
+        fps: 12,
+        quality: 80,
+        startMin: 0,
+        startSec: 0,
+        endMin,
+        endSec,
+        width: Math.max(1, Math.round(meta.width || 1)),
+        height: Math.max(1, Math.round(meta.height || 1)),
+        highQualityPalette: true,
+      });
+      console.log('[TEMP_DEBUG] 打开视频导入参数弹窗');
+      setShowVideoImportModal(true);
+    } catch (err) {
+      console.error('[TEMP_DEBUG] 视频导入失败:', err);
+      alert(String(err));
+    }
+  };
+
+  const handleConfirmVideoImport = async () => {
+    console.log('[TEMP_DEBUG] 确认视频导入参数');
+    if (isVideoImporting) {
+      return;
+    }
+    if (!videoMeta || !videoImportPath) {
+      return;
+    }
+    const rawStart = Math.max(0, Math.floor(videoImportOptions.startMin) * 60 + Math.floor(videoImportOptions.startSec));
+    const rawEnd = Math.max(0, Math.floor(videoImportOptions.endMin) * 60 + Math.floor(videoImportOptions.endSec));
+    const durationSec = Math.max(0, Math.floor(videoMeta.durationSec));
+    const hasDuration = durationSec > 0;
+    const startSec = hasDuration ? Math.min(rawStart, durationSec) : rawStart;
+    const endSec = hasDuration ? Math.min(rawEnd, durationSec) : rawEnd;
+    if (hasDuration && endSec <= startSec) {
+      alert('时间段无效');
+      return;
+    }
+    try {
+      setIsLoadingGif(true);
+      setIsVideoImporting(true);
+      setVideoImportStatus({ status: 'running' });
+      setError(null);
+      setExtractProgress({
+        fullframes: { current: 0, total: 0 },
+        previews: { current: 0, total: 0 },
+      });
+      setIsExtractPaused(false);
+      setHasAutoPassedOnce(false);
+      const workDirPath = await invoke<string>('init_work_dir');
+      setWorkDir(workDirPath);
+      setLoadedWorkspacePath(null);
+      try { 
+        sessionStorage.setItem('hasUserLoadedGif', '1'); 
+        sessionStorage.removeItem('loadedWorkspacePath');
+        sessionStorage.setItem('tempWorkDirPath', workDirPath);
+      } catch {}
+      setGifLoadingProgress({ stage: 'prepare', current: 1, total: 1, message: t('actions.importVideo') });
+      const options: Record<string, any> = { fps: videoImportOptions.fps, quality: videoImportOptions.quality };
+      if (videoImportOptions.width > 0) options.width = videoImportOptions.width;
+      if (videoImportOptions.height > 0) options.height = videoImportOptions.height;
+      if (videoImportOptions.highQualityPalette) options.high_quality_palette = true;
+    if (startSec > 0) {
+      options.start_time_sec = startSec;
+    }
+    if (endSec > startSec) {
+      options.end_time_sec = endSec;
+    }
+      const convertStartTime = performance.now();
+      console.log('[TEMP_DEBUG] 开始视频转 GIF:', { videoImportPath, workDirPath, options });
+      const jobId = await invoke<string>('start_video_to_gif', {
+        video_path: videoImportPath,
+        videoPath: videoImportPath,
+        work_dir: workDirPath,
+        workDir: workDirPath,
+        options
+      });
+      setVideoImportJobId(jobId);
+      setGifLoadingProgress(null);
+      const pollStatus = async () => {
+        while (true) {
+          const status = await invoke<VideoConvertStatus>('get_video_to_gif_status', { jobId });
+          setVideoImportStatus(status);
+          if (status.status !== 'running') {
+            return status;
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      };
+      const finalStatus = await pollStatus();
+      const convertDuration = performance.now() - convertStartTime;
+      console.log(`[TEMP_DEBUG] 步骤: 视频转 GIF, 耗时: ${convertDuration.toFixed(2)}ms`);
+      if (finalStatus.status === 'done' && finalStatus.output_path) {
+        console.log('[TEMP_DEBUG] 视频转 GIF 输出路径:', finalStatus.output_path);
+        let fileSize = 0;
+        try { fileSize = await invoke<number>('get_file_size', { path: finalStatus.output_path }); } catch {}
+        try { sessionStorage.setItem('lastGifPath', finalStatus.output_path); } catch {}
+        try { sessionStorage.setItem('lastSourcePath', finalStatus.output_path); } catch {}
+        await loadGifIntoWorkspace(finalStatus.output_path, workDirPath, fileSize);
+        setLoading(false);
+        setGifLoadingProgress(null);
+        setShowVideoImportModal(false);
+      } else if (finalStatus.status === 'error') {
+        alert(finalStatus.error || '视频导入失败');
+      }
+    } catch (err) {
+      console.error('[TEMP_DEBUG] 视频导入失败:', err);
+      alert(String(err));
+    } finally {
+      setIsLoadingGif(false);
+      setIsVideoImporting(false);
+      setVideoImportJobId(null);
+    }
+  };
+
+  const handleCancelVideoImport = async () => {
+    if (isVideoImporting && videoImportJobId) {
+      try {
+        await invoke('cancel_video_to_gif', { jobId: videoImportJobId });
+      } catch (err) {
+        console.error('[TEMP_DEBUG] 取消视频导入失败:', err);
+      } finally {
+        setVideoImportStatus({ status: 'cancelled' });
+        setIsVideoImporting(false);
+        setIsLoadingGif(false);
+      }
+      return;
+    }
+    setShowVideoImportModal(false);
+  };
+
+  const formatVideoDuration = (durationSec: number) => {
+    const total = Math.max(0, Math.floor(durationSec));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    const sStr = s < 10 ? `0${s}` : `${s}`;
+    return `${m}:${sStr}`;
   };
 
   // 清理资源
@@ -3828,26 +4109,255 @@ function App() {
     });
   };
 
+  const videoImportModal = showVideoImportModal && videoMeta ? (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 10000,
+      }}
+      onClick={() => {
+        if (!isVideoImporting) {
+          setShowVideoImportModal(false);
+        }
+      }}
+    >
+      <div
+        style={{
+          width: 520,
+          maxWidth: '90vw',
+          background: '#fff',
+          borderRadius: 8,
+          padding: 20,
+          boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+          color: '#222',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+          {t('videoImport.title')}
+        </div>
+        <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+          {t('videoImport.duration')}: {formatVideoDuration(videoMeta.durationSec)} · {t('videoImport.resolution')}: {videoMeta.width}×{videoMeta.height}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+          <div>{t('videoImport.fps')}</div>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={videoImportOptions.fps}
+            onChange={(e) => {
+              const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
+              setVideoImportOptions(prev => ({ ...prev, fps: v }));
+            }}
+            disabled={isVideoImporting}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+          <div>{t('videoImport.quality')}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={videoImportOptions.quality}
+              onChange={(e) => {
+                const v = Math.min(100, Math.max(1, Math.floor(Number(e.target.value) || 1)));
+                setVideoImportOptions(prev => ({ ...prev, quality: v }));
+              }}
+              disabled={isVideoImporting}
+              style={{ width: 100 }}
+            />
+            <div style={{ fontSize: 12, color: '#666' }}>{t('videoImport.qualityHint')}</div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+          <div>{t('videoImport.timeRange')}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <VideoRangeSlider
+              min={0}
+              max={Math.max(0, Math.floor(videoMeta.durationSec))}
+              start={videoImportOptions.startMin * 60 + videoImportOptions.startSec}
+              end={videoImportOptions.endMin * 60 + videoImportOptions.endSec}
+              onChange={(s, e) => {
+                const sMin = Math.floor(s / 60);
+                const sSec = s % 60;
+                const eMin = Math.floor(e / 60);
+                const eSec = e % 60;
+                setVideoImportOptions(prev => ({ ...prev, startMin: sMin, startSec: sSec, endMin: eMin, endSec: eSec }));
+              }}
+              disabled={isVideoImporting}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
+              <span>{t('videoImport.start')}: {formatVideoDuration(videoImportOptions.startMin * 60 + videoImportOptions.startSec)}</span>
+              <span>{t('videoImport.end')}: {formatVideoDuration(videoImportOptions.endMin * 60 + videoImportOptions.endSec)}</span>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <div>{t('videoImport.size')}</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={videoImportOptions.width}
+              onChange={(e) => {
+                const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                if (isAspectLocked) {
+                  const ratio = videoAspectRatioRef.current || (videoMeta.width > 0 && videoMeta.height > 0 ? videoMeta.width / videoMeta.height : 1);
+                  const newHeight = Math.max(1, Math.round(v / (ratio || 1)));
+                  setVideoImportOptions(prev => ({ ...prev, width: v, height: newHeight }));
+                } else {
+                  setVideoImportOptions(prev => ({ ...prev, width: v }));
+                }
+              }}
+              style={{ width: 100 }}
+              disabled={isVideoImporting}
+            />
+            <span>×</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={videoImportOptions.height}
+              onChange={(e) => {
+                const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                if (isAspectLocked) {
+                  const ratio = videoAspectRatioRef.current || (videoMeta.width > 0 && videoMeta.height > 0 ? videoMeta.width / videoMeta.height : 1);
+                  const newWidth = Math.max(1, Math.round(v * (ratio || 1)));
+                  setVideoImportOptions(prev => ({ ...prev, height: v, width: newWidth }));
+                } else {
+                  setVideoImportOptions(prev => ({ ...prev, height: v }));
+                }
+              }}
+              style={{ width: 100 }}
+              disabled={isVideoImporting}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+          <div>{t('videoImport.aspectLock')}</div>
+          <div style={{ fontSize: 12, color: '#666' }}>{t('videoImport.aspectRatio', { width: videoMeta.width, height: videoMeta.height })}</div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+          <div>{t('videoImport.highQualityPalette')}</div>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={videoImportOptions.highQualityPalette}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setVideoImportOptions(prev => ({ ...prev, highQualityPalette: checked }));
+              }}
+              disabled={isVideoImporting}
+            />
+          </label>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button className="action-button secondary" onClick={handleCancelVideoImport}>
+            {t('videoImport.cancel')}
+          </button>
+          <button className="action-button primary" onClick={handleConfirmVideoImport} disabled={isVideoImporting}>
+            {isVideoImporting ? (
+              <>
+                <span className="button-icon spinning">⏳</span>
+                {t('videoImport.statusProcessing')}
+              </>
+            ) : (
+              t('videoImport.confirm')
+            )}
+          </button>
+        </div>
+        <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid #eee' }}>
+          <div style={{ fontSize: 12, color: '#666', marginBottom: 6 }}>
+            {(() => {
+              if (!videoImportStatus) {
+                return isVideoImporting ? t('videoImport.statusProcessing') : t('videoImport.statusIdle');
+              }
+              if (videoImportStatus.status === 'done') return t('videoImport.statusDone');
+              if (videoImportStatus.status === 'error') return `${t('videoImport.statusError')}${videoImportStatus.error ? `: ${videoImportStatus.error}` : ''}`;
+              if (videoImportStatus.status === 'cancelled') return t('videoImport.statusCancelled');
+              const message = videoImportStatus.message?.trim();
+              if (message) {
+                const normalized = message.toLowerCase();
+                const progressMap: Record<string, string> = {
+                  'preparing workspace': t('progress.preparingFiles'),
+                  'extracting frames': t('progress.extractingToDisk'),
+                  'converting to gif': t('progress.processing'),
+                  'cleaning up': t('progress.cleaningUp'),
+                  'generating palette': t('progress.generatingPalette'),
+                  'applying palette': t('progress.applyingPalette'),
+                  'preparing': t('progress.preparing'),
+                  'processing': t('progress.processing'),
+                };
+                if (progressMap[normalized]) return progressMap[normalized];
+                if (message === '准备中') return t('progress.preparingFiles');
+                if (message === '处理中') return t('progress.processing');
+              }
+              return message || t('videoImport.statusProcessing');
+            })()}
+          </div>
+          <div style={{ height: 6, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
+            <div
+              style={{
+                height: '100%',
+                width: '100%',
+                background:
+                  !videoImportStatus
+                    ? '#d9d9d9'
+                    : videoImportStatus.status === 'done'
+                      ? '#4caf50'
+                      : videoImportStatus.status === 'error'
+                        ? '#f44336'
+                        : videoImportStatus.status === 'cancelled'
+                          ? '#9e9e9e'
+                          : '#4d7cff',
+                opacity: isVideoImporting || (videoImportStatus && videoImportStatus.status !== 'cancelled') ? 1 : 0.6,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (loading) {
     return (
-      <div className="app">
-        <div className="loading">加载中...</div>
-      </div>
+      <>
+        <div className="app">
+          <div className="loading">加载中...</div>
+        </div>
+        {videoImportModal}
+      </>
     );
   }
 
   if (error) {
     return (
-      <div className="app">
-        <div className="error">{error}</div>
-      </div>
+      <>
+        <div className="app">
+          <div className="error">{error}</div>
+        </div>
+        {videoImportModal}
+      </>
     );
   }
 
   if (frames.length === 0) {
     return (
+      <>
       <div className="app">
-        {(isApplyingChanges || isLoadingWorkspace || isLoadingGif) && (
+        {(!showVideoImportModal && (isApplyingChanges || isLoadingWorkspace || isLoadingGif)) && (
           <div className="processing-overlay">
             <div className="processing-content">
               <div className="processing-spinner"></div>
@@ -3902,11 +4412,14 @@ function App() {
           <div style={{ width: 300, fontSize: '0.9rem', color: '#666', marginBottom: 12, textAlign: 'center', fontWeight: 500 }}>{t('home.noGifs')}</div>
           <div className="actions-panel" style={{ display: 'flex', gap: 12, width: 300 }}>
             <button className="action-button primary" onClick={handleLoadGif}>📁 {t('actions.loadGif') || 'Load GIF File'}</button>
+            <button className="action-button primary" onClick={handleImportVideo}>📹 {t('actions.importVideo') || 'Import Video'}</button>
             <button className="action-button secondary" onClick={handleLoadWorkspace}>📂 {t('actions.loadWorkspace') || 'Load Workspace'}</button>
             <LanguageSwitcher />
           </div>
         </div>
       </div>
+      {videoImportModal}
+      </>
     );
   }
 
@@ -3966,7 +4479,7 @@ function App() {
   }
   return (
     <>
-      {/* 预览模态窗口 */}
+      {videoImportModal}
       {showPreviewModal && previewModalGifUrl && (
         <div 
           style={{
@@ -4055,7 +4568,7 @@ function App() {
       
       <div className="app">
         {/* 处理中的覆盖层 */}
-      {(isApplyingChanges || isLoadingWorkspace || isLoadingGif) && (
+      {(!showVideoImportModal && (isApplyingChanges || isLoadingWorkspace || isLoadingGif)) && (
         <div className="processing-overlay">
           <div className="processing-content">
             <div className="processing-spinner"></div>

@@ -7,7 +7,8 @@
     "loadWorkspace": "载入工作区",
     "saveWorkspace": "另存工作区",
     "export": "导出",
-    "saveResult": "保存成果"
+    "saveResult": "保存成果",
+    "importVideo": "从视频导入"
   },
   "stats": {
     "fileSummary": "文件概要",
@@ -192,7 +193,9 @@
     "parsingDelays": "解析延迟并准备目录...",
     "buildingPlaceholders": "构建时间线占位...",
     "parsingFramesWithCount": "解析 GIF 帧 {{current}}/{{total}}...",
-    "preparingFiles": "准备文件..."
+    "preparingFiles": "准备文件...",
+    "generatingPalette": "正在生成调色板",
+    "applyingPalette": "正在应用调色板"
   },
   "parser": {
     "init": "初始化解析流程",
@@ -216,6 +219,28 @@
     "loadError": "预览加载失败: {{error}}",
     "generateError": "预览生成失败: {{error}}",
     "loadPathError": "预览 GIF 加载失败，请检查文件路径"
+  },
+  "videoImport": {
+    "title": "从视频导入",
+    "duration": "时长",
+    "resolution": "分辨率",
+    "fps": "帧率",
+    "quality": "颜色质量",
+    "qualityHint": "1-100，越高越清晰但文件越大",
+    "timeRange": "时间段",
+    "start": "开始",
+    "end": "结束",
+    "size": "分辨率",
+    "cancel": "取消",
+    "confirm": "确定",
+    "aspectLock": "锁定纵横比",
+    "aspectRatio": "{{width}}×{{height}}",
+    "highQualityPalette": "高质量调色板",
+    "statusIdle": "等待开始",
+    "statusProcessing": "处理中",
+    "statusDone": "完成",
+    "statusError": "失败",
+    "statusCancelled": "已取消"
   },
   "workspace": {
     "noVersions": "没有成果可保存",
