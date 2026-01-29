@@ -43,10 +43,17 @@ jobs:
       - name: Build sidecar binaries (macOS)
         run: |
           set -euo pipefail
+          set -x
           REPO_ROOT="$(pwd)"
           mkdir -p "$REPO_ROOT/binaries/bin" "$REPO_ROOT/_build"
           cd "$REPO_ROOT/_build"
-          curl -fL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz" -o ffmpeg.tar.gz
+          FFMPEG_URL_PRIMARY="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz"
+          FFMPEG_URL_FALLBACK="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/release/${FFMPEG_VERSION}.tar.gz"
+          FFMPEG_URL="$(printf '%s' "$FFMPEG_URL_PRIMARY" | tr -d '[:space:]`')"
+          if ! curl -fL --retry 3 --retry-delay 2 --http1.1 "$FFMPEG_URL" -o ffmpeg.tar.gz; then
+            FFMPEG_URL="$(printf '%s' "$FFMPEG_URL_FALLBACK" | tr -d '[:space:]`')"
+            curl -fL --retry 3 --retry-delay 2 --http1.1 "$FFMPEG_URL" -o ffmpeg.tar.gz
+          fi
           tar -xzf ffmpeg.tar.gz
           cd "ffmpeg-${FFMPEG_VERSION}"
           ./configure --disable-debug --disable-doc --disable-ffplay --disable-ffprobe --enable-static --disable-shared --prefix="$REPO_ROOT/_build/ffmpeg-install"
@@ -54,7 +61,13 @@ jobs:
           make install
           cp "$REPO_ROOT/_build/ffmpeg-install/bin/ffmpeg" "$REPO_ROOT/binaries/bin/ffmpeg"
           cd "$REPO_ROOT/_build"
-          curl -fL "https://www.lcdf.org/gifsicle/gifsicle-${GIFSICLE_VERSION}.tar.gz" -o gifsicle.tar.gz
+          GIFSICLE_URL_PRIMARY="https://www.lcdf.org/gifsicle/gifsicle-${GIFSICLE_VERSION}.tar.gz"
+          GIFSICLE_URL_FALLBACK="https://github.com/kohler/gifsicle/archive/refs/tags/v${GIFSICLE_VERSION}.tar.gz"
+          GIFSICLE_URL="$(printf '%s' "$GIFSICLE_URL_PRIMARY" | tr -d '[:space:]`')"
+          if ! curl -fL --retry 3 --retry-delay 2 --http1.1 "$GIFSICLE_URL" -o gifsicle.tar.gz; then
+            GIFSICLE_URL="$(printf '%s' "$GIFSICLE_URL_FALLBACK" | tr -d '[:space:]`')"
+            curl -fL --retry 3 --retry-delay 2 --http1.1 "$GIFSICLE_URL" -o gifsicle.tar.gz
+          fi
           tar -xzf gifsicle.tar.gz
           cd "gifsicle-${GIFSICLE_VERSION}"
           ./configure --prefix="$REPO_ROOT/_build/gifsicle-install"
