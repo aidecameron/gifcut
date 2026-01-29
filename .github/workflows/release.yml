@@ -19,9 +19,9 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     env:
-      FFMPEG_VERSION: 7.1
-      GIFSICLE_VERSION: 1.94
-      GIFSKI_VERSION: 1.12.2
+      FFMPEG_VERSION: 8.0
+      GIFSICLE_VERSION: 1.96
+      GIFSKI_VERSION: 1.34.0
 
     steps:
       - name: Checkout repository
@@ -46,7 +46,7 @@ jobs:
           REPO_ROOT="$(pwd)"
           mkdir -p "$REPO_ROOT/binaries/bin" "$REPO_ROOT/_build"
           cd "$REPO_ROOT/_build"
-          curl -L "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz" -o ffmpeg.tar.gz
+          curl -fL "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.gz" -o ffmpeg.tar.gz
           tar -xzf ffmpeg.tar.gz
           cd "ffmpeg-${FFMPEG_VERSION}"
           ./configure --disable-debug --disable-doc --disable-ffplay --disable-ffprobe --enable-static --disable-shared --prefix="$REPO_ROOT/_build/ffmpeg-install"
@@ -54,7 +54,7 @@ jobs:
           make install
           cp "$REPO_ROOT/_build/ffmpeg-install/bin/ffmpeg" "$REPO_ROOT/binaries/bin/ffmpeg"
           cd "$REPO_ROOT/_build"
-          curl -L "https://www.lcdf.org/gifsicle/gifsicle-${GIFSICLE_VERSION}.tar.gz" -o gifsicle.tar.gz
+          curl -fL "https://www.lcdf.org/gifsicle/gifsicle-${GIFSICLE_VERSION}.tar.gz" -o gifsicle.tar.gz
           tar -xzf gifsicle.tar.gz
           cd "gifsicle-${GIFSICLE_VERSION}"
           ./configure --prefix="$REPO_ROOT/_build/gifsicle-install"
@@ -62,9 +62,10 @@ jobs:
           make install
           cp "$REPO_ROOT/_build/gifsicle-install/bin/gifsicle" "$REPO_ROOT/binaries/bin/gifsicle"
           cd "$REPO_ROOT/_build"
-          curl -L "https://github.com/ImageOptim/gifski/archive/refs/tags/v${GIFSKI_VERSION}.tar.gz" -o gifski.tar.gz
+          curl -fL "https://github.com/ImageOptim/gifski/archive/refs/tags/v${GIFSKI_VERSION}.tar.gz" -o gifski.tar.gz || curl -fL "https://github.com/ImageOptim/gifski/archive/refs/tags/${GIFSKI_VERSION}.tar.gz" -o gifski.tar.gz
+          GIFSKI_SRC_DIR="$(tar -tzf gifski.tar.gz | head -1 | cut -f1 -d"/")"
           tar -xzf gifski.tar.gz
-          cd "gifski-${GIFSKI_VERSION}"
+          cd "$GIFSKI_SRC_DIR"
           cargo build --release
           cp "target/release/gifski" "$REPO_ROOT/binaries/bin/gifski"
           chmod +x "$REPO_ROOT/binaries/bin/ffmpeg" "$REPO_ROOT/binaries/bin/gifsicle" "$REPO_ROOT/binaries/bin/gifski"
