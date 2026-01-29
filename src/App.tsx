@@ -4245,10 +4245,6 @@ function App() {
             />
           </div>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 8 }}>
-          <div>{t('videoImport.aspectLock')}</div>
-          <div style={{ fontSize: 12, color: '#666' }}>{t('videoImport.aspectRatio', { width: videoMeta.width, height: videoMeta.height })}</div>
-        </div>
         <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: 10, alignItems: 'center', marginBottom: 16 }}>
           <div>{t('videoImport.highQualityPalette')}</div>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>

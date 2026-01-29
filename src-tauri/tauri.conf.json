@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "GifCut",
-    "version": "0.12.12"
+    "version": "0.12.15"
   },
   "tauri": {
     "allowlist": {
@@ -27,7 +27,11 @@
         "removeDir": true,
         "copyFile": true,
         "exists": true,
-        "scope": ["$RESOURCE/**", "$APP/**", "$TEMP/**"]
+        "scope": [
+          "$RESOURCE/**",
+          "$APP/**",
+          "$TEMP/**"
+        ]
       },
       "path": {
         "all": true
@@ -73,7 +77,11 @@
         "icons/icon.ico"
       ],
       "resources": [],
-      "externalBin": ["../binaries/bin/gifsicle", "../binaries/bin/gifski", "../binaries/bin/ffmpeg"]
+      "externalBin": [
+        "../binaries/bin/gifsicle",
+        "../binaries/bin/gifski",
+        "../binaries/bin/ffmpeg"
+      ]
     },
     "security": {
       "csp": null
@@ -82,7 +90,7 @@
       {
         "fullscreen": false,
         "resizable": true,
-        "title": "GifCut v0.12.12",
+        "title": "GifCut v0.12.15",
         "width": 1000,
         "height": 850,
         "minWidth": 1000,

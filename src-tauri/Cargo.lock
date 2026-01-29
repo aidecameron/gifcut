@@ -1016,7 +1016,7 @@ dependencies = [
 
 [[package]]
 name = "gifcut"
-version = "0.12.12"
+version = "0.12.15"
 dependencies = [
  "gif 0.12.0",
  "image",

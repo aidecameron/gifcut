@@ -1,6 +1,6 @@
 {
   "name": "gifcut",
-  "version": "0.12.12",
+  "version": "0.12.15",
   "description": "A GIF editor built with Tauri",
   "license": "AGPL-3.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "sync-version": "node -e \"const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const v=pkg.version;const tauriPath='src-tauri/tauri.conf.json';const tauri=JSON.parse(fs.readFileSync(tauriPath,'utf8'));tauri.package=tauri.package||{};tauri.package.version=v;fs.writeFileSync(tauriPath,JSON.stringify(tauri,null,2)+'\\n');const cargoPath='src-tauri/Cargo.toml';let cargo=fs.readFileSync(cargoPath,'utf8');cargo=cargo.replace(/(\\[package\\][\\s\\S]*?^version\\s*=\\s*\\\")[^\\\"]*(\\\")/m,`$1${v}$2`);fs.writeFileSync(cargoPath,cargo);\"",
+    "sync-version": "node -e \"const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));const v=pkg.version;const tauriPath='src-tauri/tauri.conf.json';const tauri=JSON.parse(fs.readFileSync(tauriPath,'utf8'));tauri.package=tauri.package||{};tauri.package.version=v;if(tauri.tauri&&Array.isArray(tauri.tauri.windows)){tauri.tauri.windows=tauri.tauri.windows.map(w=>{if(w&&typeof w==='object'){const titleBase=String(w.title||'GifCut').replace(/\\s+v\\d+(?:\\.\\d+){0,2}/i,'').trim();return Object.assign({},w,{title:titleBase+' v'+v});}return w;});}fs.writeFileSync(tauriPath,JSON.stringify(tauri,null,2)+'\\n');const cargoPath='src-tauri/Cargo.toml';let cargo=fs.readFileSync(cargoPath,'utf8');cargo=cargo.replace(/(\\[package\\][\\s\\S]*?^version\\s*=\\s*\\\")[^\\\"]*(\\\")/m,(m,p1,p2)=>p1+v+p2);fs.writeFileSync(cargoPath,cargo);const indexPath='index.html';let html=fs.readFileSync(indexPath,'utf8');html=html.replace(/<title>\\s*GifCut\\s+v\\d+(?:\\.\\d+){0,2}\\s*<\\/title>/i,'<title>GifCut v'+v+'</title>');fs.writeFileSync(indexPath,html);\"",
     "tauri": "tauri",
     "tauri:dev": "npm run sync-version && tauri dev",
     "tauri:build": "npm run sync-version && tauri build"
