@@ -62,7 +62,7 @@ jobs:
           make install
           cp "$REPO_ROOT/_build/gifsicle-install/bin/gifsicle" "$REPO_ROOT/binaries/bin/gifsicle"
           cd "$REPO_ROOT/_build"
-          curl -fL "https://github.com/ImageOptim/gifski/archive/refs/tags/v${GIFSKI_VERSION}.tar.gz" -o gifski.tar.gz || curl -fL "https://github.com/ImageOptim/gifski/archive/refs/tags/${GIFSKI_VERSION}.tar.gz" -o gifski.tar.gz
+          curl -fL "https://crates.io/api/v1/crates/gifski/${GIFSKI_VERSION}/download" -o gifski.tar.gz
           GIFSKI_SRC_DIR="$(tar -tzf gifski.tar.gz | head -1 | cut -f1 -d"/")"
           tar -xzf gifski.tar.gz
           cd "$GIFSKI_SRC_DIR"
