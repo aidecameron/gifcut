@@ -83,6 +83,9 @@ jobs:
           cd "$GIFSKI_SRC_DIR"
           cargo build --release
           cp "target/release/gifski" "$REPO_ROOT/binaries/bin/gifski"
+          cp "$REPO_ROOT/binaries/bin/ffmpeg" "$REPO_ROOT/binaries/bin/ffmpeg-${{ matrix.target }}"
+          cp "$REPO_ROOT/binaries/bin/gifsicle" "$REPO_ROOT/binaries/bin/gifsicle-${{ matrix.target }}"
+          cp "$REPO_ROOT/binaries/bin/gifski" "$REPO_ROOT/binaries/bin/gifski-${{ matrix.target }}"
           chmod +x "$REPO_ROOT/binaries/bin/ffmpeg" "$REPO_ROOT/binaries/bin/gifsicle" "$REPO_ROOT/binaries/bin/gifski"
 
       - name: Build and Release
